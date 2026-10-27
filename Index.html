@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Suma · Control de Gastos</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React y ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel para JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const DEFAULT_EXPENSE_CATEGORIES = [
+            'Vivienda', 'Alimentos', 'Supermercado', 'Transporte', 'Servicios', 'Salud', 
+            'Educación', 'Entretenimiento', 'Restaurantes/Delivery', 'Mascotas', 
+            'Suscripciones/Streaming', 'Indumentaria', 'Cuidado Personal', 'Deudas', 'Ahorro', 'Otros'
+        ];
+
+        const DEFAULT_INCOME_CATEGORIES = ['Sueldo', 'Ingresos extra', 'Freelance', 'Inversiones', 'Ventas', 'Otros'];
+        const DEFAULT_PAYMENT_METHODS = ['Efectivo', 'Débito', 'Crédito', 'Transferencia', 'Billetera virtual', 'Mercado Pago'];
+
+        const INITIAL_DEMO = [
+            { id: 1, fecha: '2026-09-02', tipo: 'Ingreso', categoria: 'Sueldo', medio: 'Transferencia', descripcion: 'Sueldo mensual', importe: 1200000, esDemo: true },
+            { id: 2, fecha: '2026-09-03', tipo: 'Gasto', categoria: 'Vivienda', medio: 'Transferencia', descripcion: 'Alquiler', importe: 450000, esDemo: true },
+            { id: 3, fecha: '2026-09-05', tipo: 'Gasto', categoria: 'Supermercado', medio: 'Débito', descripcion: 'Supermercado', importe: 185000, esDemo: true },
+            { id: 4, fecha: '2026-09-10', tipo: 'Gasto', categoria: 'Servicios', medio: 'Billetera virtual', descripcion: 'Luz y Gas', importe: 42000, esDemo: true }
+        ];
+
+        function App() {
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [transactions, setTransactions] = useState(() => {
+                const saved = localStorage.getItem('suma_transactions');
+                return saved ? JSON.parse(saved) : INITIAL_DEMO;
+            });
+            
+            const [config, setConfig] = useState(() => {
+                const saved = localStorage.getItem('suma_config');
+                return saved ? JSON.parse(saved) : {
+                    presupuestoMensual: 1300000,
+                    metaAhorro: 0.20,
+                    alertaGasto: 0.85,
+                    moneda: '$',
+                    mostrarDemo: true
+                };
+            });
+
+            useEffect(() => {
+                localStorage.setItem('suma_transactions', JSON.stringify(transactions));
+            }, [transactions]);
+
+            useEffect(() => {
+                localStorage.setItem('suma_config', JSON.stringify(config));
+            }, [config]);
+
+            const [searchTerm, setSearchTerm] = useState('');
+            const [filterType, setFilterType] = useState('Todos');
+            const [showAiModal, setShowAiModal] = useState(false);
+            const [aiInputText, setAiInputText] = useState('');
+            const [parsedPreview, setParsedPreview] = useState(null);
+
+            const [newTx, setNewTx] = useState({
+                fecha: new Date().toISOString().split('T')[0],
+                tipo: 'Gasto',
+                categoria: 'Alimentos',
+                medio: 'Débito',
+                descripcion: '',
+                importe: ''
+            });
+
+            const filteredTransactions = transactions.filter(t => {
+                if (!config.mostrarDemo && t.esDemo) return false;
+                const matchSearch = t.descripcion.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                    t.categoria.toLowerCase().includes(searchTerm.toLowerCase());
+                const matchType = filterType === 'Todos' || t.tipo === filterType;
+                return matchSearch && matchType;
+            });
+
+            const totalIngresos = filteredTransactions.filter(t => t.tipo === 'Ingreso').reduce((acc, t) => acc + Number(t.importe), 0);
+            const totalGastos = filteredTransactions.filter(t => t.tipo === 'Gasto').reduce((acc, t) => acc + Number(t.importe), 0);
+            const saldoDisponible = totalIngresos - totalGastos;
+            const pctPresupuestoUsado = config.presupuestoMensual > 0 ? Math.min(Math.round((totalGastos / config.presupuestoMensual) * 100), 100) : 0;
+
+            const parseNaturalLanguage = (text) => {
+                if (!text) return;
+                const lower = text.toLowerCase();
+                const amountMatch = lower.match(/\b\d+([.,]\d+)?\b/);
+                const importe = amountMatch ? parseFloat(amountMatch[0].replace(',', '.')) : 0;
+                const isIncome = lower.includes('cobré') || lower.includes('ingreso') || lower.includes('sueldo') || lower.includes('gané');
+                const tipo = isIncome ? 'Ingreso' : 'Gasto';
+                
+                let categoryFound = isIncome ? 'Ingresos extra' : 'Otros';
+                const cats = isIncome ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
+                for (let cat of cats) {
+                    if (lower.includes(cat.toLowerCase())) { categoryFound = cat; break; }
+                }
+
+                let medioFound = 'Efectivo';
+                if (lower.includes('tarjeta') || lower.includes('crédito')) medioFound = 'Crédito';
+                else if (lower.includes('débito')) medioFound = 'Débito';
+                else if (lower.includes('transferencia')) medioFound = 'Transferencia';
+                else if (lower.includes('mercado pago')) medioFound = 'Mercado Pago';
+
+                setParsedPreview({
+                    fecha: new Date().toISOString().split('T')[0],
+                    tipo,
+                    categoria: categoryFound,
+                    medio: medioFound,
+                    descripcion: text,
+                    importe
+                });
+            };
+
+            const handleAddManual = (e) => {
+                e.preventDefault();
+                if (!newTx.importe) return;
+                setTransactions([{ ...newTx, id: Date.now(), importe: Number(newTx.importe), esDemo: false }, ...transactions]);
+                setNewTx({ fecha: new Date().toISOString().split('T')[0], tipo: 'Gasto', categoria: 'Alimentos', medio: 'Débito', descripcion: '', importe: '' });
+                setActiveTab('history');
+            };
+
+            return (
+                <div className="min-h-screen pb-20 max-w-md mx-auto flex flex-col">
+                    <header className="bg-blue-600 text-white p-4 sticky top-0 z-30 shadow-md flex justify-between items-center">
+                        <div>
+                            <h1 className="text-lg font-bold">Suma · Finanzas</h1>
+                            <p className="text-xs text-blue-100">Control Personal</p>
+                        </div>
+                        <button onClick={() => setShowAiModal(true)} className="bg-blue-500 hover:bg-blue-400 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow">
+                            ✨ Asistente IA
+                        </button>
+                    </header>
+
+                    <main className="p-4 flex-1 space-y-4">
+                        {activeTab === 'dashboard' && (
+                            <div className="space-y-4">
+                                <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-5 text-white shadow-lg">
+                                    <span className="text-xs text-blue-200 uppercase font-bold">Saldo Disponible</span>
+                                    <div className="text-3xl font-extrabold my-1">{config.moneda}{saldoDisponible.toLocaleString()}</div>
+                                    <div className="grid grid-cols-2 gap-3 pt-3 border-t border-blue-400/30 text-xs">
+                                        <div><span className="text-blue-200">Ingresos:</span> <br/><b>{config.moneda}{totalIngresos.toLocaleString()}</b></div>
+                                        <div><span className="text-blue-200">Gastos:</span> <br/><b>{config.moneda}{totalGastos.toLocaleString()}</b></div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-xl p-4 shadow-sm border space-y-3 text-xs">
+                                    <div>
+                                        <div className="flex justify-between font-semibold mb-1">
+                                            <span>Presupuesto Usado</span>
+                                            <span>{pctPresupuestoUsado}%</span>
+                                        </div>
+                                        <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                                            <div className="bg-blue-600 h-full" style={{ width: `${Math.min(pctPresupuestoUsado, 100)}%` }} />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'history' && (
+                            <div className="space-y-3">
+                                <input 
+                                    type="text"
+                                    placeholder="Buscar movimiento..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="w-full p-2 bg-white border rounded-xl text-xs focus:outline-none"
+                                />
+                                <div className="space-y-2">
+                                    {filteredTransactions.map(t => (
+                                        <div key={t.id} className="bg-white p-3 rounded-xl border shadow-sm flex justify-between items-center text-xs">
+                                            <div>
+                                                <div className="font-bold">{t.descripcion || t.categoria}</div>
+                                                <div className="text-slate-400 text-[10px]">{t.fecha} • {t.categoria} • {t.medio}</div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <span className={`font-bold ${t.tipo === 'Ingreso' ? 'text-emerald-600' : 'text-slate-800'}`}>
+                                                    {t.tipo === 'Ingreso' ? '+' : '-'}{config.moneda}{Number(t.importe).toLocaleString()}
+                                                </span>
+                                                <button onClick={() => setTransactions(transactions.filter(i => i.id !== t.id))} className="text-slate-300 hover:text-rose-500">✕</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'add' && (
+                            <form onSubmit={handleAddManual} className="bg-white rounded-xl p-4 shadow-sm border space-y-3 text-xs">
+                                <h2 className="font-bold text-slate-700 border-b pb-2">Nuevo Movimiento</h2>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button type="button" onClick={() => setNewTx({...newTx, tipo: 'Gasto'})} className={`py-2 rounded-lg font-bold border ${newTx.tipo === 'Gasto' ? 'bg-rose-500 text-white' : 'bg-slate-50'}`}>Gasto</button>
+                                    <button type="button" onClick={() => setNewTx({...newTx, tipo: 'Ingreso'})} className={`py-2 rounded-lg font-bold border ${newTx.tipo === 'Ingreso' ? 'bg-emerald-500 text-white' : 'bg-slate-50'}`}>Ingreso</button>
+                                </div>
+                                <div>
+                                    <label className="text-slate-500 font-semibold">Importe</label>
+                                    <input type="number" required value={newTx.importe} onChange={(e) => setNewTx({...newTx, importe: e.target.value})} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-bold" />
+                                </div>
+                                <div>
+                                    <label className="text-slate-500 font-semibold">Descripción</label>
+                                    <input type="text" value={newTx.descripcion} onChange={(e) => setNewTx({...newTx, descripcion: e.target.value})} className="w-full p-2 bg-slate-50 border rounded-lg" />
+                                </div>
+                                <div>
+                                    <label className="text-slate-500 font-semibold">Categoría</label>
+                                    <select value={newTx.categoria} onChange={(e) => setNewTx({...newTx, categoria: e.target.value})} className="w-full p-2 bg-slate-50 border rounded-lg">
+                                        {(newTx.tipo === 'Gasto' ? DEFAULT_EXPENSE_CATEGORIES : DEFAULT_INCOME_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                </div>
+                                <button type="submit" className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg shadow">Guardar</button>
+                            </form>
+                        )}
+
+                        {activeTab === 'settings' && (
+                            <div className="bg-white rounded-xl p-4 shadow-sm border space-y-3 text-xs">
+                                <h3 className="font-bold text-slate-700 border-b pb-2">Ajustes</h3>
+                                <div>
+                                    <label className="text-slate-500">Presupuesto Mensual</label>
+                                    <input type="number" value={config.presupuestoMensual} onChange={(e) => setConfig({...config, presupuestoMensual: Number(e.target.value)})} className="w-full p-2 bg-slate-50 border rounded-lg font-bold" />
+                                </div>
+                                <button onClick={() => setTransactions(INITIAL_DEMO)} className="w-full py-2 bg-slate-100 rounded-lg font-semibold">Restaurar Demo</button>
+                            </div>
+                        )}
+                    </main>
+
+                    {showAiModal && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-md rounded-2xl p-5 shadow-2xl space-y-3 text-xs">
+                                <div className="flex justify-between items-center border-b pb-2 font-bold text-blue-600">
+                                    <span>Asistente IA (Texto / Voz)</span>
+                                    <button onClick={() => setShowAiModal(false)}>✕</button>
+                                </div>
+                                <textarea rows={3} placeholder='Escribe: "Gasté 15000 en super con tarjeta"' value={aiInputText} onChange={(e) => { setAiInputText(e.target.value); parseNaturalLanguage(e.target.value); }} className="w-full p-2.5 bg-slate-50 border rounded-xl" />
+                                {parsedPreview && parsedPreview.importe > 0 && (
+                                    <div className="bg-blue-50 border p-3 rounded-xl space-y-1">
+                                        <div><b>Tipo:</b> {parsedPreview.tipo} | <b>Monto:</b> ${parsedPreview.importe}</div>
+                                        <div><b>Categoría:</b> {parsedPreview.categoria}</div>
+                                        <button onClick={() => { setTransactions([{...parsedPreview, id: Date.now(), esDemo: false}, ...transactions]); setParsedPreview(null); setAiInputText(''); setShowAiModal(false); }} className="w-full mt-2 py-2 bg-blue-600 text-white font-bold rounded-lg">Confirmar Registro</button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    <nav className="fixed bottom-0 left-0 right-0 bg-white border-t z-40 max-w-md mx-auto grid grid-cols-4 py-2 text-center text-xs">
+                        <button onClick={() => setActiveTab('dashboard')} className={activeTab === 'dashboard' ? 'text-blue-600 font-bold' : 'text-slate-400'}>Mi Mes</button>
+                        <button onClick={() => setActiveTab('history')} className={activeTab === 'history' ? 'text-blue-600 font-bold' : 'text-slate-400'}>Movimientos</button>
+                        <button onClick={() => setActiveTab('add')} className={activeTab === 'add' ? 'text-blue-600 font-bold' : 'text-slate-400'}>Cargar</button>
+                        <button onClick={() => setActiveTab('settings')} className={activeTab === 'settings' ? 'text-blue-600 font-bold' : 'text-slate-400'}>Ajustes</button>
+                    </nav>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+  </html>
+  
